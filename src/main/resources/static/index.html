@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Browser Agent</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.6.1/sockjs.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0a0a0f; --surface: #111118; --border: #1e1e2e;
+    --accent: #7c6af7; --accent2: #4fd1c5;
+    --text: #e2e8f0; --muted: #64748b;
+    --success: #4fd1c5; --error: #f87171; --warn: #fbbf24;
+  }
+
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: 'Space Grotesk', sans-serif;
+    min-height: 100vh; display: flex; flex-direction: column;
+    align-items: center; padding: 2rem 1rem;
+  }
+
+  body::before {
+    content: ''; position: fixed; inset: 0;
+    background-image:
+      linear-gradient(rgba(124,106,247,.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(124,106,247,.03) 1px, transparent 1px);
+    background-size: 40px 40px; pointer-events: none; z-index: 0;
+  }
+
+  .container { position: relative; z-index: 1; width: 100%; max-width: 860px; display: flex; flex-direction: column; gap: 1.5rem; }
+
+  header { display: flex; align-items: center; gap: 1rem; padding-bottom: 1.5rem; border-bottom: 1px solid var(--border); }
+
+  .logo { width: 40px; height: 40px; background: linear-gradient(135deg, var(--accent), var(--accent2)); border-radius: 10px; display: grid; place-items: center; font-size: 1.2rem; }
+
+  h1 { font-size: 1.3rem; font-weight: 600; letter-spacing: -.02em; }
+
+  .badge { margin-left: auto; font-family: 'IBM Plex Mono', monospace; font-size: .65rem; color: var(--accent); border: 1px solid var(--accent); padding: 2px 8px; border-radius: 99px; opacity: .7; }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 1.5rem; }
+
+  .card-label { font-size: .75rem; font-weight: 500; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); margin-bottom: .75rem; }
+
+  textarea { width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; color: var(--text); font-family: 'Space Grotesk', sans-serif; font-size: .95rem; padding: .875rem 1rem; resize: vertical; min-height: 90px; outline: none; transition: border-color .2s; line-height: 1.5; }
+  textarea:focus { border-color: var(--accent); }
+  textarea::placeholder { color: var(--muted); }
+
+  .examples { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .75rem; }
+
+  .example-chip { font-size: .75rem; color: var(--muted); border: 1px solid var(--border); border-radius: 99px; padding: 4px 12px; cursor: pointer; transition: all .15s; background: transparent; }
+  .example-chip:hover { color: var(--text); border-color: var(--accent); }
+
+  .run-btn { margin-top: 1rem; width: 100%; padding: .875rem; background: linear-gradient(135deg, var(--accent), #5a4fcf); color: #fff; font-family: 'Space Grotesk', sans-serif; font-size: .95rem; font-weight: 600; border: none; border-radius: 10px; cursor: pointer; transition: opacity .2s, transform .1s; }
+  .run-btn:hover:not(:disabled) { opacity: .9; }
+  .run-btn:active:not(:disabled) { transform: scale(.99); }
+  .run-btn:disabled { opacity: .4; cursor: not-allowed; }
+
+  .status-bar { display: flex; align-items: center; gap: .625rem; font-size: .8rem; color: var(--muted); }
+
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); transition: background .3s; }
+  .dot.running { background: var(--accent2); animation: pulse 1.2s ease-in-out infinite; }
+  .dot.done { background: var(--success); }
+  .dot.error { background: var(--error); }
+
+  @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .5; transform: scale(.8); } }
+
+  .terminal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: .75rem; }
+  .terminal-title { font-family: 'IBM Plex Mono', monospace; font-size: .75rem; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+  .clear-btn { font-size: .7rem; color: var(--muted); background: transparent; border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px; cursor: pointer; transition: color .15s; }
+  .clear-btn:hover { color: var(--text); }
+
+  #log { background: #07070d; border: 1px solid var(--border); border-radius: 12px; padding: 1rem 1.25rem; min-height: 300px; max-height: 480px; overflow-y: auto; font-family: 'IBM Plex Mono', monospace; font-size: .8rem; line-height: 1.7; scroll-behavior: smooth; }
+
+  .log-entry { display: flex; gap: .75rem; opacity: 0; animation: fadeIn .2s forwards; }
+  @keyframes fadeIn { to { opacity: 1; } }
+  .log-time { color: var(--muted); flex-shrink: 0; font-size: .72rem; padding-top: 1px; }
+  .log-msg { color: var(--text); }
+  .log-msg.success { color: var(--success); }
+  .log-msg.error { color: var(--error); }
+  .log-msg.warn { color: var(--warn); }
+  .log-msg.info { color: var(--accent); }
+
+  /* ── Result box ── */
+  #result-box { display: none; background: rgba(79,209,197,.07); border: 1px solid rgba(79,209,197,.3); border-radius: 12px; padding: 1.25rem 1.5rem; }
+  #result-box .result-label { font-size: .7rem; text-transform: uppercase; letter-spacing: .1em; color: var(--accent2); font-weight: 600; margin-bottom: .5rem; }
+  #result-text { font-size: .9rem; line-height: 1.6; white-space: pre-wrap; }
+
+  /* ── Report card ── */
+  #report-card {
+    display: none;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 1.25rem 1.5rem;
+  }
+
+  .report-header-row {
+    display: flex; align-items: center; gap: .75rem; margin-bottom: 1rem;
+  }
+
+  .report-icon {
+    width: 36px; height: 36px;
+    background: rgba(251,191,36,.1); border: 1px solid rgba(251,191,36,.25);
+    border-radius: 9px; display: grid; place-items: center; font-size: 1rem; flex-shrink: 0;
+  }
+
+  .report-title { font-size: .95rem; font-weight: 600; }
+  .report-sub { font-size: .75rem; color: var(--muted); margin-top: 2px; }
+
+  .report-actions { display: flex; gap: .75rem; flex-wrap: wrap; }
+
+  .report-btn {
+    flex: 1; min-width: 140px;
+    padding: .65rem 1rem;
+    border-radius: 9px; border: none; cursor: pointer;
+    font-family: 'Space Grotesk', sans-serif; font-size: .85rem; font-weight: 600;
+    transition: opacity .15s;
+  }
+  .report-btn:hover { opacity: .85; }
+
+  .btn-open { background: linear-gradient(135deg, var(--warn), #d97706); color: #000; }
+  .btn-download { background: var(--border); color: var(--text); border: 1px solid #2d2d3e; }
+
+  #log::-webkit-scrollbar { width: 4px; }
+  #log::-webkit-scrollbar-track { background: transparent; }
+  #log::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
+
+  /* ── Token display ── */
+  .token-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: .75rem; }
+  .token-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+    gap: .75rem;
+  }
+  .token-item { text-align: center; padding: .5rem; background: var(--bg); border-radius: 8px; border: 1px solid var(--border); }
+  .token-item .token-val {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 1.1rem; font-weight: 600; color: var(--warn);
+  }
+  .token-item .token-item-label {
+    font-size: .62rem; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .06em; margin-top: .2rem;
+  }
+  .token-item.cost .token-val { color: var(--accent2); }
+</style>
+</head>
+<body>
+
+<div class="container">
+
+  <header>
+    <div class="logo">🤖</div>
+    <div>
+      <h1>Browser Agent</h1>
+      <div style="font-size:.75rem;color:var(--muted);margin-top:2px">AI-powered browser automation · Java + LangChain4j + Playwright</div>
+    </div>
+    <div class="badge" id="ws-badge">connecting…</div>
+  </header>
+
+  <div class="card">
+    <div class="card-label">Task</div>
+    <textarea id="task-input" placeholder="e.g. Go to Wikipedia and find the population of India, then summarize the article intro"></textarea>
+
+    <div class="examples">
+      <span class="card-label" style="align-self:center">Try: </span>
+      <button class="example-chip" onclick="setExample(this)">Go to Hacker News and list the top 5 headlines</button>
+      <button class="example-chip" onclick="setExample(this)">Search for 'Java Spring Boot' on GitHub and count public repos</button>
+      <button class="example-chip" onclick="setExample(this)">Go to weather.com and find the weather for Mumbai</button>
+    </div>
+
+    <div style="display:flex;gap:.75rem;margin-top:1rem">
+      <button class="run-btn" id="run-btn" onclick="runTask()" style="margin-top:0;flex:1">▶ Run Agent</button>
+      <button class="run-btn" id="save-test-btn" onclick="saveTest()" style="margin-top:0;flex:none;width:auto;padding:.875rem 1.25rem;background:var(--border)">💾 Save as Test</button>
+    </div>
+  </div>
+
+  <div class="status-bar">
+    <div class="dot" id="status-dot"></div>
+    <span id="status-text">Idle — waiting for a task</span>
+  </div>
+
+  <!-- Token usage display — hidden until task runs -->
+  <div id="token-card" class="card" style="display:none">
+    <div class="token-header">
+      <span class="terminal-title">▸ Token Consumption</span>
+    </div>
+    <div class="token-grid">
+      <div class="token-item">
+        <div class="token-val" id="token-input">0</div>
+        <div class="token-item-label">Input</div>
+      </div>
+      <div class="token-item">
+        <div class="token-val" id="token-output">0</div>
+        <div class="token-item-label">Output</div>
+      </div>
+      <div class="token-item">
+        <div class="token-val" id="token-total">0</div>
+        <div class="token-item-label">Total</div>
+      </div>
+      <div class="token-item">
+        <div class="token-val" id="token-calls">0</div>
+        <div class="token-item-label">LLM Calls</div>
+      </div>
+      <div class="token-item cost">
+        <div class="token-val" id="token-cost">$0.00000</div>
+        <div class="token-item-label">Est. Cost</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="terminal-header">
+      <span class="terminal-title">▸ Agent Log</span>
+      <button class="clear-btn" onclick="clearLog()">Clear</button>
+    </div>
+    <div id="log"></div>
+  </div>
+
+  <div id="result-box">
+    <div class="result-label">✦ Result</div>
+    <div id="result-text"></div>
+  </div>
+
+  <!-- Report card — appears when report is ready -->
+  <div id="report-card">
+    <div class="report-header-row">
+      <div class="report-icon">📋</div>
+      <div>
+        <div class="report-title">Execution Report Ready</div>
+        <div class="report-sub" id="report-filename">Includes full action timeline and screenshots</div>
+      </div>
+    </div>
+    <div class="report-actions">
+      <button class="report-btn btn-open" onclick="openReport()">↗ Open Report</button>
+      <button class="report-btn btn-download" onclick="downloadReport()">⬇ Download HTML</button>
+    </div>
+  </div>
+
+  <!-- Saved test cases -->
+  <div class="card" id="tests-card">
+    <div class="terminal-header">
+      <span class="terminal-title">▸ Saved Tests</span>
+      <button class="clear-btn" onclick="loadTests()" title="Refresh">⟳ Refresh</button>
+    </div>
+    <div id="tests-list" style="font-family:'IBM Plex Mono',monospace;font-size:.8rem;line-height:1.8;min-height:40px;color:var(--muted)">Loading…</div>
+  </div>
+
+</div>
+
+<script>
+  let stompClient = null;
+
+  function connect() {
+    const socket = new SockJS('/ws');
+    stompClient = Stomp.over(socket);
+    stompClient.debug = null;
+
+    stompClient.connect({}, () => {
+      document.getElementById('ws-badge').textContent = 'connected';
+      document.getElementById('ws-badge').style.color = 'var(--success)';
+      document.getElementById('ws-badge').style.borderColor = 'var(--success)';
+
+      stompClient.subscribe('/topic/logs', msg => {
+        appendLog(msg.body);
+      });
+
+      stompClient.subscribe('/topic/done', msg => {
+        setStatus('done', 'Task complete');
+        document.getElementById('run-btn').disabled = false;
+        showResult(msg.body);
+      });
+
+      // Report ready signal — show the report card
+      stompClient.subscribe('/topic/report-ready', msg => {
+        document.getElementById('report-filename').textContent =
+          'Report: ' + msg.body + ' · includes screenshots';
+        const card = document.getElementById('report-card');
+        card.style.display = 'block';
+        card.scrollIntoView({ behavior: 'smooth' });
+        appendLog('📋 Report ready — click "Open Report" to view', 'success');
+      });
+
+      // Token usage updates — real-time during agent run
+      stompClient.subscribe('/topic/token-usage', msg => {
+        const data = JSON.parse(msg.body);
+        updateTokenDisplay(data);
+      });
+
+    }, () => {
+      document.getElementById('ws-badge').textContent = 'disconnected';
+      setTimeout(connect, 3000);
+    });
+  }
+
+  function runTask() {
+    const task = document.getElementById('task-input').value.trim();
+    if (!task) { alert('Please enter a task.'); return; }
+
+    document.getElementById('run-btn').disabled = true;
+    document.getElementById('result-box').style.display = 'none';
+    document.getElementById('report-card').style.display = 'none';
+    clearLog();
+    resetTokenDisplay();
+    setStatus('running', 'Agent running…');
+
+    fetch('/api/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task })
+    })
+    .then(r => r.json())
+    .then(data => {
+      if (data.error) {
+        appendLog('❌ ' + data.error, 'error');
+        setStatus('error', data.error);
+        document.getElementById('run-btn').disabled = false;
+      }
+    })
+    .catch(err => {
+      appendLog('❌ Request failed: ' + err, 'error');
+      setStatus('error', 'Request failed');
+      document.getElementById('run-btn').disabled = false;
+    });
+  }
+
+  function openReport() {
+    window.open('/api/report', '_blank');
+  }
+
+  function downloadReport() {
+    window.location.href = '/api/report/download';
+  }
+
+  function appendLog(msg, typeHint) {
+    const log = document.getElementById('log');
+    const entry = document.createElement('div');
+    entry.className = 'log-entry';
+
+    const now = new Date();
+    const time = now.toTimeString().slice(0, 8);
+
+    let cls = typeHint || '';
+    if (!cls) {
+      if (msg.startsWith('✅') || msg.startsWith('🎉')) cls = 'success';
+      else if (msg.startsWith('❌')) cls = 'error';
+      else if (msg.startsWith('⚠️')) cls = 'warn';
+      else if (msg.startsWith('🚀') || msg.startsWith('📋')) cls = 'info';
+    }
+
+    entry.innerHTML = `
+      <span class="log-time">${time}</span>
+      <span class="log-msg ${cls}">${escHtml(msg)}</span>
+    `;
+    log.appendChild(entry);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  function showResult(text) {
+    const box = document.getElementById('result-box');
+    document.getElementById('result-text').textContent = text;
+    box.style.display = 'block';
+  }
+
+  function setStatus(state, text) {
+    document.getElementById('status-dot').className = 'dot ' + state;
+    document.getElementById('status-text').textContent = text;
+  }
+
+  function clearLog() { document.getElementById('log').innerHTML = ''; }
+
+  function resetTokenDisplay() {
+    document.getElementById('token-card').style.display = 'none';
+    document.getElementById('token-input').textContent = '0';
+    document.getElementById('token-output').textContent = '0';
+    document.getElementById('token-total').textContent = '0';
+    document.getElementById('token-calls').textContent = '0';
+    document.getElementById('token-cost').textContent = '$0.00000';
+  }
+
+  function updateTokenDisplay(data) {
+    const card = document.getElementById('token-card');
+    card.style.display = 'block';
+    document.getElementById('token-input').textContent = formatTokenNum(data.inputTokens);
+    document.getElementById('token-output').textContent = formatTokenNum(data.outputTokens);
+    document.getElementById('token-total').textContent = formatTokenNum(data.totalTokens);
+    document.getElementById('token-calls').textContent = data.llmCalls;
+    document.getElementById('token-cost').textContent = '$' + data.estimatedCost.toFixed(5);
+  }
+
+  function formatTokenNum(n) {
+    if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+    if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+    return String(n);
+  }
+  function setExample(el) { document.getElementById('task-input').value = el.textContent.trim(); }
+  function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  // ── Test cases ───────────────────────────────────────────────────────────
+
+  function loadTests() {
+    fetch('/api/tests')
+      .then(r => r.json())
+      .then(tests => {
+        const el = document.getElementById('tests-list');
+        if (!tests.length) {
+          el.innerHTML = '<span style="color:var(--muted)">No saved tests. Run a task and save it as a test case.</span>';
+          return;
+        }
+        el.innerHTML = tests.map(t => `
+          <div style="display:flex;align-items:center;gap:.75rem;padding:.5rem 0;border-bottom:1px solid var(--border)">
+            <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+              <span style="color:var(--accent)">${escHtml(t.name)}</span>
+              <span style="color:var(--muted);font-size:.72rem"> — ${escHtml(t.task)}</span>
+            </span>
+            <button class="clear-btn" onclick="runTest('${t.id}')" title="Run test">▶ Run</button>
+            <button class="clear-btn" onclick="deleteTest('${t.id}')" title="Delete test" style="color:var(--error)">✕</button>
+          </div>
+        `).join('');
+      })
+      .catch(() => document.getElementById('tests-list').textContent = 'Failed to load tests');
+  }
+
+  function saveTest() {
+    const task = document.getElementById('task-input').value.trim();
+    if (!task) { alert('Enter a task first.'); return; }
+    const name = prompt('Name this test case:', task.slice(0, 60) + (task.length > 60 ? '…' : ''));
+    if (!name) return;
+    fetch('/api/tests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, task })
+    })
+    .then(r => r.json())
+    .then(() => { loadTests(); appendLog('💾 Saved test case: ' + name, 'success'); })
+    .catch(err => appendLog('❌ Failed to save test: ' + err, 'error'));
+  }
+
+  function runTest(id) {
+    document.getElementById('task-input').value = '';
+    document.getElementById('run-btn').disabled = true;
+    document.getElementById('result-box').style.display = 'none';
+    document.getElementById('report-card').style.display = 'none';
+    clearLog();
+    resetTokenDisplay();
+    setStatus('running', 'Running saved test…');
+    fetch('/api/tests/' + id + '/run', { method: 'POST' })
+      .then(r => r.json())
+      .then(data => {
+        if (data.error) {
+          appendLog('❌ ' + data.error, 'error');
+          setStatus('error', data.error);
+          document.getElementById('run-btn').disabled = false;
+        }
+      })
+      .catch(err => {
+        appendLog('❌ Request failed: ' + err, 'error');
+        setStatus('error', 'Request failed');
+        document.getElementById('run-btn').disabled = false;
+      });
+  }
+
+  function deleteTest(id) {
+    if (!confirm('Delete this test case?')) return;
+    fetch('/api/tests/' + id, { method: 'DELETE' })
+      .then(() => loadTests())
+      .catch(err => appendLog('❌ Failed to delete test: ' + err, 'error'));
+  }
+
+  connect();
+  loadTests();
+</script>
+</body>
+</html>
